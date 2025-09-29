@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <title>Miiniesweaper - PVP</title>
+        <style>
+            body {
+                font-family: Arial, sans-serif;
+                text-align: center;
+            }
+            .board {
+                display: inline-block;
+                margin: 20px;
+            }
+            .cell {
+                width: 30px;
+                height: 30px;
+                border: 1px solid #ccc;
+                display: inline-block;
+                text-align: center;
+                vertical-align: middle;
+                font-size: 20px;
+                cursor: pointer;
+
+                /* Default color for unrevealed tiles */
+                background-color: #eee;
+
+                /* Default color for unrevealed tile text */
+                color: #333;
+            }
+            .revealed {
+                /* Color for revealed tiles */
+                background-color: #ccc;
+
+                /* Color for revealed tile text */
+                color: #000;
+            }
+            .mine {
+                /* Color for mines */
+                background-color: #ff3333;
+            }
+        </style>
+    </head>
+    <!--<link rel="stylesheet" href="style.css">!-->
+    <body>
+        <h1>WebSocket Connection</h1>
+        <h2>Your ID: <span id="ws-id"></span></h2>
+        <form action="" onsubmit="createLobby(event)" id="hostForm">
+            <input type="text" id="lobbyID" autocomplete="off"/>
+            <button onclick="connect(event)" id="joinButton">Join</button>
+            <button id="hostButton">Host</button>
+        </form>
+        <form action="" onsubmit="startLobby(event)" id="startForm">
+            <button id="startButton">Start</button>
+        </form>
+        <ul id='messages'>
+        </ul>
+        <div id="gameBoard"></div>
+        <div id="health"></div>
+        <script>
+            
+            let paused = false;
+            let revealed = [];
+
+            const gameBoard =
+                document.getElementById(
+                    "gameBoard"
+                );
+
+            
+            const healthBar = 
+                document.getElementById(
+                    "health"
+                );
+            
+            var client_id = Date.now()
+            document.querySelector("#ws-id").textContent = client_id;
+
+            let ws;
+
+            async function createLobby(event) {
+                event.preventDefault()
+                const URL = "http://127.0.0.1:8000/lobby";
+                
+                try {
+                    const response = await fetch(URL, {
+                        method: "POST",
+                    });
+                    if(!response.ok) {
+                        throw new Error(`Response status: ${response.status}`);
+                    }
+
+                const RESULT = await response.json();
+                console.log(RESULT);
+
+                if(RESULT.hasOwnProperty("lobby_id")) {
+                    connectWS(RESULT.lobby_id);
+                }
+                
+                } catch(error) {
+                    console.error(error.message);
+                }
+            }
+
+            
+            function connectWS(lobby_id) {
+                ws = new WebSocket("ws://localhost:8000/ws/" + lobby_id + "/" + client_id);
+                    
+                ws.onopen = function(event) {
+                    console.log("Websocket connected");
+                    var button = document.getElementById("hostForm");
+                    button.style.display = "none";
+                    sendJoined(client_id);
+                }
+
+                ws.onmessage = function(event) {
+                    try{
+                        var data = JSON.parse(event.data);
+                        console.log("PARSE JSON: ", data);
+                        if(data.hasOwnProperty("ACTION")) {
+                            if(data.ACTION == "BOARD") {
+                                if(data.hasOwnProperty("SIZE")) {
+                                    
+                                    revealed = Array.from({length: data.SIZE}, () => Array(data.SIZE).fill(null));
+                                    renderBoard(data.SIZE);
+                                    renderHealth(data.HEALTH);
+                                    paused = false;
+                                    
+                                }
+                            }
+                            else {
+                                if(data.hasOwnProperty("PLAYER")) {
+                                    if(data.PLAYER === String(client_id)) {
+                                        if(data.ACTION == "CHECK") {
+                                            if(data.hasOwnProperty("FIELDS")) {
+                                                updateBoard(data.FIELDS);
+                                                renderBoard(data.SIZE);
+                                            }
+                                        }
+                                        else if(data.ACTION == "BOMB") {
+                                            updateBoard(data.FIELDS);
+                                            renderBoard(data.SIZE);
+                                            renderHealth(data.HEALTH);
+                                            if(data.LOST) {
+                                                paused = true;
+                                                newBoard();
+                                            }
+                                        }
+                                    }
+
+                                }
+                            }
+
+                        }
+                    } catch(e) {
+                        console.log("GOT TEXT");
+                        var messages = document.getElementById('messages');
+                        var message = document.createElement('li');
+                        var content = document.createTextNode(event.data);
+                        message.appendChild(content);
+                        messages.appendChild(message); 
+                    }
+                }
+            }
+
+            function newBoard() {
+                let dict = {"ACTION": "NEW_BOARD"};
+                ws.send(JSON.stringify(dict));
+            }
+
+
+            function sendJoined(client_id) {
+                let dict = {"ACTION": "JOIN"};
+                ws.send(JSON.stringify(dict));
+            }
+
+            function connect(event) {
+                event.preventDefault();
+
+                var input = document.getElementById("lobbyID");
+
+                var button = document.getElementById("hostForm");
+                button.style.display = "none";
+                button = document.getElementById("startForm");
+                button.style.display = "none";
+                connectWS(input.value);
+            }
+
+
+            function startLobby(event) {
+                event.preventDefault();
+
+                let dict = {"ACTION": "START"};
+                ws.send(JSON.stringify(dict));
+                
+            }
+            
+            //GAMEPLAY RELATED
+
+            function checkField(pos_y, pos_x) {
+                if (paused) {
+                    return
+                }
+                //TO ADD
+                //PREVENET FROM CLICKING WHILE WAITING
+                let dict = {"ACTION": "CHECK", "Y": pos_y, "X": pos_x};
+                ws.send(JSON.stringify(dict));
+            }
+
+            function renderHealth(value) {
+                healthBar.innerHTML = "";
+                var text = "";
+                for(let i = 0; i < value; i++) {
+                    text += "#";
+                }
+                text = "HEALTH: " + text;
+                const textElement = document.createElement("p");
+                textElement.textContent = text;
+                healthBar.appendChild(textElement)
+            }
+
+
+            function renderBoard(size) { 
+                gameBoard.innerHTML = "";
+                for(let y = 0; y < size; y++){
+                    for(let x = 0; x < size; x++){
+                        const cell = document.createElement("div");
+                        cell.className = "cell";
+
+                        const field_value = revealed[y][x];
+                        if(field_value != null) {
+                            cell.classList.add("revealed");
+                            if(field_value === -1) {
+                                    cell.classList.add("mine");
+                                    cell.textContent = "💣";
+                            }
+                            else if(field_value != 0) {
+                                    cell.textContent = field_value;
+                            }
+                        } 
+                        else {
+                            cell.addEventListener("click", () => checkField(y, x));
+                        }
+                        gameBoard.appendChild(cell);
+                    }
+                    gameBoard.appendChild(document.createElement("br"));
+                }
+                
+            }
+            
+            function updateBoard(fields) {
+                fields.forEach(element => {
+                    console.log(element.POSITION);
+                    const y = element.POSITION[0];
+                    const x = element.POSITION[1];
+                    revealed[y][x] = element.VALUE;
+                });
+            }
+        </script>
+    </body>
+</html>
