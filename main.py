@@ -97,13 +97,11 @@ class Board:
 
 
 class Player:
-
-    board: Board | None = None
-
     def __init__(self, is_host: bool = False):
         self.is_host: bool = is_host
         self.client_id: str = ""
         self.health: int = 4
+        self.board: Board | None = None
 
     def create_board(self, size: int, bombs: int):
         self.board = Board(bombs, size)
@@ -121,9 +119,8 @@ class ConnectionManager:
     def __init__(self):
         self.active_connections: list[WebSocket] = []
 
-    async def connect(self, websocket: WebSocket, lobby_id: str, client_id: str):
+    def connect(self, websocket: WebSocket, lobby_id: str, client_id: str):
         global lobbies
-        await websocket.accept()
         new_player = Player()
         if len(lobbies[lobby_id]["players"]) == 0:
             new_player.is_host = True
@@ -131,10 +128,11 @@ class ConnectionManager:
         
         self.active_connections.append(websocket)
 
-    def disconnect(self, websocket: WebSocket):
+    def disconnect(self, websocket: WebSocket, lobby_id: str):
         global lobbies
         self.active_connections.remove(websocket)
-        del lobbies[lobby_id]["players"][websocket]
+        if lobby_id in lobbies and websocket in lobbies[lobby_id]["players"]:
+            del lobbies[lobby_id]["players"][websocket]
 
     async def send_personal_message(self, message: str, websocket: WebSocket):
         await websocket.send_text(message)
@@ -191,14 +189,23 @@ async def get_index():
 
 @app.websocket("/ws/{lobby_id}/{client_id}")
 async def websocket_endpoint(websocket: WebSocket, lobby_id: str, client_id: str):
-    await manager.connect(websocket, lobby_id, client_id)
+    await websocket.accept()
+    if lobby_id not in lobbies:
+        await manager.send_personal_message("Error: Lobby not found", websocket)
+        await websocket.close(code=1008, reason="Lobby not found")
+        return
+    manager.connect(websocket, lobby_id, client_id)
     print(f"Nowe połączenie: lobby={lobby_id}, client={client_id}")
     try:
         while True:
             data = await websocket.receive_text()
             #Recive move
-            json_data = json.loads(data)
-            
+            try:
+                json_data = json.loads(data)
+            except json.JSONDecodeError:
+                await manager.send_personal_message("ERROR: Invalid JSON", websocket)
+                break
+                
             action = json_data.get("ACTION")
 
             #if action == "JOIN":
@@ -206,6 +213,10 @@ async def websocket_endpoint(websocket: WebSocket, lobby_id: str, client_id: str
             #    await manager.broadcast(f"Player #{client_id} joined", lobby_id)
 
             if action == "JOIN":
+                if lobby_id not in lobbies:
+                    await manager.broadcast("ERROR: Lobby not found", websocket)
+                    break
+            
                 await manager.broadcast(f"Player #{client_id} joined the lobby", lobby_id)
             elif action == "START":
                 await manager.start_lobby(lobby_id)
@@ -253,5 +264,14 @@ async def websocket_endpoint(websocket: WebSocket, lobby_id: str, client_id: str
            #await manager.send_personal_message(f"You wrote: {data}", websocket)
            #await manager.broadcast(f"Client #{client_id} says: {data}")
     except WebSocketDisconnect:
-        manager.disconnect(websocket)
+        manager.disconnect(websocket, lobby_id)
         await manager.broadcast(f"Client #{client_id} left the lobby", lobby_id)
+    except Exception as e:
+        if websocket in manager.active_connections:
+            print(f"Error: {e}")
+            manager.disconnect(websocket, lobby_id)
+            await manager.broadcast("Error: Problem with websocket", websocket)
+    finally:
+        if websocket in manager.active_connections:
+            manager.disconnect(websocket, lobby_id)
+            await manager.broadcast("Error: Something went wrong", websocket)
