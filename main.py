@@ -12,6 +12,8 @@ app = FastAPI()
 
 lobbies: dict = {}
 
+ACTIONS = ["JOIN", "START", "CHECK", "NEW_BOARD",]
+
 class Board:
     def __init__(self, bombs: int, size: int):
         self.bombs = bombs
@@ -138,6 +140,8 @@ class ConnectionManager:
         await websocket.send_text(message)
 
     async def broadcast(self, message: str, lobby_id: str):
+        if lobby_id not in lobbies:
+            return
         for websocket in lobbies[lobby_id]["players"]:
             await websocket.send_text(message)
     
@@ -208,6 +212,9 @@ async def websocket_endpoint(websocket: WebSocket, lobby_id: str, client_id: str
                 
             action = json_data.get("ACTION")
 
+            if action not in ACTIONS:
+                await manager.send_personal_message("ERROR: Wrong action", websocket)
+                break
             #if action == "JOIN":
             #    print("DU")
             #    await manager.broadcast(f"Player #{client_id} joined", lobby_id)
@@ -225,11 +232,18 @@ async def websocket_endpoint(websocket: WebSocket, lobby_id: str, client_id: str
                 y = json_data.get("Y")
                 
                 print(json_data)
+                if x is None or y is None:
+                    await manager.send_personal_message("Error: Missing coordinates", websocket)
+                    break
                 player = lobbies[lobby_id]["players"][websocket]
 
                 if player.board is None:
                     await manager.send_personal_message("ERROR NO BOARD", websocket)
-                    continue
+                    break
+                
+                if not(0 <= x < player.board.size and 0 <= y < player.board.size):
+                    await manager.send_personal_message("ERROR: Wrong coordinates", websocket)
+                    break
                 
                 fields: list = player.board.check_value(y, x)
                 new_dict = {}
